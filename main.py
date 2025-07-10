@@ -1,101 +1,93 @@
 import os
-import logging
-import sqlite3
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
-from telegram.constants import ParseMode
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-BOT_TOKEN = "توکن خودتو اینجا بذار"
-
+# لیست کانال‌هایی که عضویت در آن‌ها الزامی است
 REQUIRED_CHANNELS = [
-    {"name": "کانال اول", "username": "yourchannel1"},
-    {"name": "کانال دوم", "username": "yourchannel2"},
+    {"username": "channel1", "name": "کانال اول"},
+    {"username": "channel2", "name": "کانال دوم"}
 ]
 
-conn = sqlite3.connect("users.db", check_same_thread=False)
-c = conn.cursor()
-c.execute(
-    "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, is_member INTEGER)"
-)
-conn.commit()
+# دیکشنری پرامپت‌ها بر اساس آیدی
+PROMPTS = {
+    "13": """I want you to make a hyperrealistic close-up portrait of my face from this picture, with only the left half visible and partly under water. The scene is neon light that casts colorful reflections on wet skin and wet hair.
+Drops of water and small blisters stick on the face and enhance the cinematic mood and skin structure.
+The intense concentration of the eyes is clearly visible"""
+}
 
-logging.basicConfig(level=logging.INFO)
+# بررسی عضویت کاربر در کانال‌ها
+async def is_user_member(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    missing_channels = []
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = await context.bot.get_chat_member(chat_id=f"@{channel['username']}", user_id=user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                missing_channels.append(channel)
+        except:
+            missing_channels.append(channel)
+    return missing_channels
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-
-    prompt_id = args[0] if args else None
-
-    if not await is_user_member(update, context):
-        await send_force_subscribe_buttons(update)
-        return
-
-    if prompt_id:
-        prompt_text = get_prompt_text(prompt_id)
-        if prompt_text:
-            await update.message.reply_text(
-                f"🧠 پرامپت {prompt_id}:
-
-{prompt_text}", parse_mode=ParseMode.HTML
-            )
-        else:
-            await update.message.reply_text("پرامپتی با این شناسه پیدا نشد.")
-    else:
-        await update.message.reply_text("برای دریافت پرامپت، از طریق لینک وارد شوید.")
-
-async def check_membership(update, context, channel):
-    try:
-        user_id = update.effective_user.id
-        member = await context.bot.get_chat_member(f"@{channel}", user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
-
-async def is_user_member(update, context):
-    for ch in REQUIRED_CHANNELS:
-        if not await check_membership(update, context, ch["username"]):
-            return False
-    return True
-
-async def send_force_subscribe_buttons(update):
-    keyboard = [
-        [InlineKeyboardButton(f"عضویت در {ch['name']}", url=f"https://t.me/{ch['username']}")]
-        for ch in REQUIRED_CHANNELS
-    ]
-    keyboard.append([InlineKeyboardButton("✅ عضو شدم", callback_data="check_sub")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "⛔️ برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید:",
-        reply_markup=reply_markup,
-    )
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# هندلر دکمه‌ها
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "check_sub":
-        if await is_user_member(update, context):
-            await query.edit_message_text("✅ عضویت تایید شد. لطفاً دوباره لینک پرامپت رو بزنید.")
+
+    data = query.data
+    if data.startswith("prompt_"):
+        prompt_id = data.split("_")[1]
+        user_id = query.from_user.id
+
+        missing = await is_user_member(user_id, context)
+
+        if missing:
+            buttons = [
+                [InlineKeyboardButton(f"📢 عضویت در {ch['name']}", url=f"https://t.me/{ch['username']}")]
+                for ch in missing
+            ]
+            buttons.append([InlineKeyboardButton("✅ عضو شدم", callback_data=f"check_{prompt_id}")])
+            reply_markup = InlineKeyboardMarkup(buttons)
+            await query.edit_message_text(
+                "⛔️ برای دریافت پرامپت، ابتدا در کانال‌های زیر عضو شوید:",
+                reply_markup=reply_markup
+            )
         else:
-            await query.answer("❌ هنوز عضو همه کانال‌ها نیستید!", show_alert=True)
+            prompt = PROMPTS.get(prompt_id, "پرامپتی یافت نشد.")
+            await query.edit_message_text(f"🧠 پرامپت {prompt_id}:\n\n{prompt}")
 
-def get_prompt_text(prompt_id):
-    prompts = {
-        "13": "I want you to make a hyperrealistic close-up portrait of my face from this picture, with only the left half visible and partly under water...",
-        "14": "This is another prompt example...",
-    }
-    return prompts.get(prompt_id)
+    elif data.startswith("check_"):
+        prompt_id = data.split("_")[1]
+        user_id = query.from_user.id
 
+        missing = await is_user_member(user_id, context)
+
+        if missing:
+            await query.answer("⛔️ هنوز در همه کانال‌ها عضو نشده‌اید.", show_alert=True)
+        else:
+            prompt = PROMPTS.get(prompt_id, "پرامپتی یافت نشد.")
+            await query.edit_message_text(f"🧠 پرامپت {prompt_id}:\n\n{prompt}")
+
+# شروع ربات
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🧠 دریافت پرامپت 13", callback_data="prompt_13")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("سلام! یکی از پرامپت‌ها رو انتخاب کن:", reply_markup=reply_markup)
+
+# پیکربندی ربات
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
-    application.run_polling()
+    TOKEN = os.getenv("BOT_TOKEN")
+    if not TOKEN:
+        print("❌ متغیر محیطی BOT_TOKEN تنظیم نشده.")
+        return
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    print("✅ ربات با موفقیت اجرا شد.")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
