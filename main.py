@@ -4,7 +4,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 # لیست کانال‌هایی که عضویت در آن‌ها الزامی است
 REQUIRED_CHANNELS = [
-    {"username": "channel1", "name": "کانال اول"},
+    {"justpromptir": "channel1", "name": "کانال اول"},
     {"username": "channel2", "name": "کانال دوم"}
 ]
 
